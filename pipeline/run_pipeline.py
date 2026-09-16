@@ -5,7 +5,7 @@ Pipeline (per scene):
     1. get_see_count.py      -- per-view visibility count
     2. get_eff_view.py       -- effective view count N_eff
     3. get_confidence.py     -- confidence c_i = ||f_i|| * N_eff/(N_eff+beta)
-    4. knn_vote.py           -- confidence-weighted KNN label voting
+    4. knn_vote.py           -- confidence-guided semantic mode voting
     5. eval_scannet.py       -- ScanNet semantic segmentation eval (mIoU / mAcc)
 
 Implementation strategy: import each script as a module, patch its path

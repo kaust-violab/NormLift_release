@@ -2,7 +2,7 @@
 
 Open-vocabulary 3D semantic segmentation on ScanNet: lift SAM+CLIP features onto
 3D Gaussians, then refine them with a norm-based confidence measure and
-confidence-weighted KNN label voting.
+confidence-guided semantic mode voting over spatial KNN neighborhoods.
 
 ## Setup
 
@@ -48,8 +48,9 @@ python pipeline/run_pipeline.py --classes 10 --steps eval
 
 The pipeline runs 5 steps per scene — visibility count → effective views →
 confidence → KNN vote → eval — and prints per-scene and mean mIoU/mAcc.
-Voting runs once in the full 19-class space; `--classes 15/10` re-evaluates the
-same voting products with a smaller label set, so those runs only need `--steps eval`.
+Voting is class-agnostic (it operates purely in feature space) and runs once;
+`--classes 15/10` re-evaluates the same voting products with a smaller label
+set, so those runs only need `--steps eval`.
 
 ## Hyperparameters
 
@@ -58,5 +59,5 @@ same voting products with a smaller label set, so those runs only need `--steps 
 | Training | iterations / resolution | 30 000 / `-r 2` |
 | Lifting | Tikhonov / SAM level | 1.0 / 3 |
 | Confidence | β (view gate) | 1.0 |
-| KNN vote | K / σ_d / τ / γ / iters | 36 / 0.05 m / 0.75 / 0.58 / ≤20 |
+| KNN vote | K / τ_r / σ_d / τ / γ / Δ | 36 / 0.75 / 0.3 m / 0.55 / 0.1 / 0.05 |
 | Eval | opacity threshold | 0.1 |

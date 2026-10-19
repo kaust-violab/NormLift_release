@@ -1,36 +1,28 @@
 """
-Confidence-Guided Semantic Mode Voting (改 feature, 不改 label).
+Reliability-guided KNN mode voting (Sec. 3.4 of the paper).
 
-跟"标签级投票"的本质区别:
-    label vote:  硬 argmax 1-of-C 分类后按类投票, 再用 text feature 重新生成 feature.
-                 封闭词汇假设, 离散化损失大.
-    mode vote:   改 feature 方向, 但不取均值, 而是从 "邻域 ∪ {自己}" 候选集里
-                 挑出"支持度最高"的某个邻居 feature 直接复制过来.
-                 → 避免 CLIP feature 被线性混合 (semantic 不平均);
-                 → 避免被 text feature 替换 (开放词汇友好);
-                 → 自带保守阈值: 只有当 mode 比"自己"明显强时才替换.
+Refines lifted features in feature space without averaging: a low-reliability
+Gaussian copies the feature of its best-supported neighbour instead of blending
+neighbours or being replaced by a text embedding. The step is class-agnostic;
+text features are only used for the before/after diagnostics printed at the end.
 
-支持度公式 (对目标 Gaussian i, 候选 j ∈ N(i) ∪ {i}):
-    S_ij = r_j *  Σ_{k ∈ N(i) ∪ {i}}  r_k * d_ik * g_jk
-其中:
-    r_j        : 候选 j 的可靠性 (= conf[j])
-    r_k        : 支持者 k 的可靠性
-    d_ik       : 支持者 k 到目标 i 的距离权重 = exp(-||μ_i - μ_k||² / (2σ_d²))
-    g_jk       : 支持者 k 与候选 j 的语义一致性 = sigmoid((cos(f_j, f_k) - τ) / γ)
-                 (软阈值: 相似度 < τ 几乎贡献 0; > τ 贡献接近 1)
+Support score (Eq. 9), for target i and candidate j in N_K(i) ∪ {i}:
+    S_ij = R(j) * Σ_{k ∈ N_K(i) ∪ {i}} R(k) * d_ik * g_jk
+    R(j)  reliability of candidate j                  (confidence/confidence.pt)
+    d_ik  spatial decay   exp(-||μ_i - μ_k||² / (2 σ_d²))
+    g_jk  semantic gate   sigmoid((cos(f_j, f_k) - τ) / γ)
 
-更新规则:
-    1. conf[i] >= TAU_R       → 高置信, 不动
-    2. 否则 j* = argmax_{j∈N(i)} S_ij;
-       若 S_ij* > S_ii + Δ    → f_i ← f_{j*}
-       否则                    → 保持原 f_i  (margin 防止过度修改)
+Conservative replacement (Eq. 10), with j* = argmax_{j ∈ N_K(i)} S_ij:
+    f_i ← f_{j*}   iff   S_ij* > S_ii + Δ,   otherwise f_i is kept.
 
-投票是类无关的 (只在 feature 空间进行); text features 仅用于打印前后类分布诊断.
-15/10 类协议直接用同一份投票产物、换 eval_scannet.py 的 TARGET_ID 重新评测.
+Every Gaussian is a target; reliability enters only through the weights R(j), R(k).
+Gaussians with f_i = 0 (R(i) = 0, never observed) are no exception: S_ii = 0, so
+they take the best-supported neighbour whenever it clears the margin (Appendix D).
 
-输出文件:
-    <NORMLIFT_OUT>/<scene>/knn_vote/voted_features.pt  # (N, D), 喂给 eval_scannet.py 的 FEAT_PATH
-    <NORMLIFT_OUT>/<scene>/knn_vote/voted_labels.pt    # (N,) int64, cos-argmax(text) 诊断标签
+Outputs:
+    <NORMLIFT_OUT>/<scene>/knn_vote/voted_features.pt  # (N, D), FEAT_PATH for eval_scannet.py
+    <NORMLIFT_OUT>/<scene>/knn_vote/voted_labels.pt    # (N,) int64, diagnostic text-argmax labels
+The 15/10-class protocols re-evaluate this same output with another TARGET_ID.
 """
 
 import json
@@ -59,14 +51,11 @@ TEXT_FEAT = str(Path(os.environ.get(
 OUT_DIR   = _OUT / _SCENE / "knn_vote"
 
 # ─── Hyperparameters ─────────────────────────────────────────────────
-K            = 36     # KNN size (空间 K 近邻)
-TAU_R        = 0.75   # 高置信阈值: conf >= 此值则跳过更新
-SIGMA_D      = 0.3    # 距离带宽 (米); d_ik = exp(-||Δμ||² / (2σ_d²))
-TAU_COS      = 0.55   # 语义一致性阈值
-GAMMA        = 0.1    # sigmoid 软化程度
-DELTA        = 0.05   # margin: 仅当 S_ij* > S_ii + Δ 才替换
-TAU_REPLACE  = 0.0    # replacement cosine guard: 仅当 cos(f_i, f_{j*}) > 此值才替换
-                      #   防止小类点的残留方向被 mode (大类) 完全吞并
+K            = 36     # spatial KNN size
+SIGMA_D      = 0.3    # spatial bandwidth (m); d_ik = exp(-||Δμ||² / (2σ_d²))
+TAU_COS      = 0.55   # semantic-agreement threshold τ
+GAMMA        = 0.1    # gate sharpness γ
+DELTA        = 0.05   # margin Δ: replace only if S_ij* > S_ii + Δ
 DEVICE       = "cuda" if torch.cuda.is_available() else "cpu"
 CHUNK_SIZE   = 4096   # GPU 每批处理的目标高斯数 (控制显存)
 
@@ -92,7 +81,7 @@ NUM_CLASSES = len(TARGET_ID)
 @torch.no_grad()
 def main():
     print(f"\n=== Confidence-Guided Semantic Mode Voting ===")
-    print(f"  K={K}  τ_r={TAU_R}  σ_d={SIGMA_D}m  τ={TAU_COS}  γ={GAMMA}  Δ={DELTA}  τ_replace={TAU_REPLACE}")
+    print(f"  K={K}  σ_d={SIGMA_D}m  τ={TAU_COS}  γ={GAMMA}  Δ={DELTA}")
 
     # ─── Load ────────────────────────────────────────────────────────
     print("\nLoading data ...")
@@ -126,20 +115,12 @@ def main():
     knn_dw_np   = np.exp(-knn_dsq_np / (2 * SIGMA_D ** 2)).astype(np.float32)
     knn_dw_dev  = torch.from_numpy(knn_dw_np).to(device)                        # (N, K)
 
-    # ─── Step 3: 选出待更新高斯 ──────────────────────────────────────
-    print(f"\nStep 3: 划分高/低置信高斯 ...")
-    needs_vote   = conf_dev < TAU_R                                             # (N,) bool
-    n_to_vote    = int(needs_vote.sum())
-    n_high_conf  = N - n_to_vote
-    print(f"  high-conf (conf >= {TAU_R}, skip):  {n_high_conf:>7d} ({n_high_conf/N*100:5.2f}%)")
-    print(f"  to vote   (conf <  {TAU_R}):        {n_to_vote:>7d} ({n_to_vote/N*100:5.2f}%)")
-
-    # ─── Step 4: 分块跑 mode voting ──────────────────────────────────
-    print(f"\nStep 4: chunked mode voting (chunk={CHUNK_SIZE}) ...")
-    target_idx_all   = torch.nonzero(needs_vote, as_tuple=False).squeeze(1)     # (n_to_vote,)
+    # ─── Step 3: 分块跑 mode voting (every Gaussian is a target) ─────
+    print(f"\nStep 3: chunked mode voting (chunk={CHUNK_SIZE}) ...")
+    n_to_vote        = N
+    target_idx_all   = torch.arange(N, device=device)                           # (N,)
     new_feats        = feats.clone()                                            # (N, D) on cpu
     n_replaced       = 0
-    n_blocked_guard  = 0    # 被 replacement cosine guard 否决的次数
 
     for start in range(0, n_to_vote, CHUNK_SIZE):
         end           = min(start + CHUNK_SIZE, n_to_vote)
@@ -184,21 +165,7 @@ def main():
         # 保守替换: max_S > S_ii + Δ
         score_pass   = max_S > (S_ii + DELTA)                                    # (M,)
 
-        # ─── replacement cosine guard ────────────────────────────────
-        # 即便 S_ij* 占优, 也要求 f_{j*} 与原 f_i 的方向不能差太远.
-        # 这样能在低置信小类高斯的"语义残留方向"上设一个安全网,
-        # 避免被语义不近但支持度高的大类 mode 一把吞并.
-        # cos(f_i, f_{j*}) 取归一化后的 inner product, 自己=ext_feats_n[:, 0, :]
-        f_i_n             = ext_feats_n[:, 0, :]                                 # (M, D)
-        chosen_local_idx  = (argmax_in_nbrs + 1).view(M, 1, 1).expand(-1, 1, D)  # (M, 1, D)
-        f_jstar_n         = ext_feats_n.gather(1, chosen_local_idx).squeeze(1)   # (M, D)
-        cos_i_jstar       = (f_i_n * f_jstar_n).sum(dim=-1)                      # (M,)
-        guard_pass        = cos_i_jstar > TAU_REPLACE                            # (M,)
-
-        # 仅做诊断: 多少次 score 通过但被 guard 拦下
-        n_blocked_guard += int((score_pass & ~guard_pass).sum())
-
-        replace_mask = score_pass & guard_pass                                   # (M,)
+        replace_mask = score_pass                                                # (M,)
 
         if int(replace_mask.sum()) > 0:
             replace_targets = chunk_targets[replace_mask].cpu()                  # (M_repl,)
@@ -208,12 +175,11 @@ def main():
             n_replaced += int(replace_mask.sum())
 
     print(f"\n  replaced (mode voted):                {n_replaced:>7d}  ({n_replaced/N*100:5.2f}%)")
-    print(f"  blocked by cos guard (τ_replace={TAU_REPLACE}):  {n_blocked_guard:>7d}  ({n_blocked_guard/N*100:5.2f}%)")
-    n_kept = n_to_vote - n_replaced
-    print(f"  kept (low conf, no consensus margin): {n_kept:>7d}  ({n_kept/N*100:5.2f}%)")
+    n_kept = N - n_replaced
+    print(f"  kept (no consensus margin):           {n_kept:>7d}  ({n_kept/N*100:5.2f}%)")
 
-    # ─── Step 5: 诊断 — 类分布前后对比 (cos sim with text features) ──
-    print(f"\nStep 5: class distribution before/after (cos-argmax with text) ...")
+    # ─── Step 4: 诊断 — 类分布前后对比 (cos sim with text features) ──
+    print(f"\nStep 4: class distribution before/after (cos-argmax with text) ...")
     target_names = [nyu40_dict[i] for i in TARGET_ID]
     with open(TEXT_FEAT) as fp:
         text_data = json.load(fp)

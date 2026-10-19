@@ -1,63 +1,161 @@
 # NormLift
 
-Open-vocabulary 3D semantic segmentation on ScanNet: lift SAM+CLIP features onto
-3D Gaussians, then refine them with a norm-based confidence measure and
-confidence-guided semantic mode voting over spatial KNN neighborhoods.
+<p align="center">
+  <a href="https://arxiv.org/abs/2609.18898"><img alt="arXiv" src="https://img.shields.io/badge/arXiv-2609.18898-b31b1b"></a>
+  <a href="https://neurips.cc/virtual/2026/poster/151918"><img alt="NeurIPS 2026" src="https://img.shields.io/badge/NeurIPS-2026-blue"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green"></a>
+  <a href="https://github.com/YihanZang/NormLift_release/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/YihanZang/NormLift_release?style=social"></a>
+</p>
 
-## Setup
+<p align="center">
+  <img src="assets/method_overview.png" width="100%">
+</p>
 
-Requires two external repos:
+**NormLift: From Lifted Features To Semantic Reliability In 3D Gaussian Splatting**
+Yihan Zang, Da Li, Dominik Engel, Shinkyu Park, Ivan Viola — *NeurIPS 2026*
 
-- [Splat Feature Solver / splat-distiller](https://github.com/saliteta/splat-distiller) —
-  `pip install .` inside it (provides `gsplat_ext` and `gaussian_splatting`);
-  set `SPLAT_DISTILLER_DIR` to its source root.
-- [OpenGaussian](https://github.com/yanmin-wu/OpenGaussian) — used for 3DGS training;
-  set `OPENGAUSSIAN_DIR` to its root.
+NormLift lifts 2D CLIP features onto 3D Gaussians **without training** and tells you **which Gaussians to trust**:
 
-Plus `faiss-gpu` and `plyfile`.
+- **Lifting as cosine alignment.** Per-Gaussian lifting is posed as a cosine-alignment problem on the CLIP unit sphere; alpha-weighted back-projection followed by ℓ2 normalization is its closed-form solution.
+- **Reliability from the norm.** The norm of the back-projected feature factors into intra-view and inter-view consistency. Calibrated by the effective number of views, it becomes a per-Gaussian reliability score `R(j)` — no extra network, no extra rendering pass.
+- **Mode voting, not averaging.** Low-reliability Gaussians copy the most-supported neighbor feature instead of averaging neighbors, so refined features stay on the CLIP sphere and the step is class-agnostic.
 
-## Data
+## Paper
 
-10 ScanNet v2 scenes (`scene0000_00 0062 0070 0097 0140 0200 0347 0400 0590 0645`),
-in OpenGaussian layout under `$NORMLIFT_DATA/<scene>/`:
-`points3d.ply`, `transforms_{train,test}.json`, `<scene>_vh_clean_2.labels.ply`,
-and LangSplat-style features in `language_features/language_features/`
-(SAM ViT-H + OpenCLIP, `*_f.npy` / `*_s.npy`).
+> **NormLift: From Lifted Features To Semantic Reliability In 3D Gaussian Splatting**
+> [arXiv:2609.18898](https://arxiv.org/abs/2609.18898) · [NeurIPS 2026](https://neurips.cc/virtual/2026/poster/151918)
+
+If you find this code useful, please consider citing our work (see [Citation](#citation)).
+
+## Results
+
+Open-vocabulary 3D semantic segmentation on ScanNet under the OpenGaussian protocol (10 scenes, every Gaussian classified independently against the class names). Numbers from Table 1 of the paper.
+
+| Method | Training-free | 19 cls. mIoU / mAcc | 15 cls. mIoU / mAcc | 10 cls. mIoU / mAcc |
+|---|:-:|:-:|:-:|:-:|
+| OpenGaussian | ✗ | 24.73 / 41.54 | 30.13 / 48.25 | 38.29 / 55.19 |
+| LAGA | ✗ | 32.50 / 49.10 | 35.50 / 53.50 | 42.60 / 63.20 |
+| SFS | ✓ | 33.33 / 51.35 | 36.43 / 55.38 | 44.74 / 63.53 |
+| LUDVIG | ✓ | 33.90 / 51.40 | 37.40 / 57.20 | 46.40 / 66.20 |
+| **NormLift** | ✓ | **35.77 / 54.02** | **39.62 / 59.26** | **48.93 / 68.83** |
+
+<p align="center">
+  <img src="assets/qualitative_scannet.png" width="100%">
+</p>
+
+## Quickstart
 
 ```sh
-# COLMAP-format copy, needed by feature lifting and the visibility steps:
-python preprocess/convert_to_colmap.py --src $NORMLIFT_DATA/<scene> --dst $NORMLIFT_DATA/<scene>_colmap
-```
+export NORMLIFT_DATA=/path/to/data                   # <scene>/ and <scene>_colmap/ live here
+export NORMLIFT_OUT=/path/to/outputs                 # per-scene training / lifting / voting outputs
+export OPENGAUSSIAN_DIR=/path/to/OpenGaussian        # 3DGS training
+export SPLAT_DISTILLER_DIR=/path/to/splat-distiller  # gsplat_ext inverse rendering
 
-## Run
-
-```sh
-export NORMLIFT_DATA=/path/to/data  NORMLIFT_OUT=/path/to/outputs
-export OPENGAUSSIAN_DIR=/path/to/OpenGaussian  SPLAT_DISTILLER_DIR=/path/to/splat-distiller
-
-# Per scene: train RGB 3DGS (frozen points), convert ckpt, lift features
+# one scene: COLMAP copy -> frozen-point 3DGS -> checkpoint conversion -> feature lifting
+python preprocess/convert_to_colmap.py --src $NORMLIFT_DATA/scene0200_00 --dst $NORMLIFT_DATA/scene0200_00_colmap
 python train/train_rgb.py --scene scene0200_00
 python train/ply_to_pt.py --scene scene0200_00
 NORMLIFT_SCENE=scene0200_00 python lift/distill_features.py
 
-# All scenes: post-processing + evaluation
+# all scenes: reliability -> mode voting -> evaluation
 python pipeline/run_pipeline.py --classes 19
 python pipeline/run_pipeline.py --classes 15 --steps eval
 python pipeline/run_pipeline.py --classes 10 --steps eval
 ```
 
-The pipeline runs 5 steps per scene — visibility count → effective views →
-confidence → KNN vote → eval — and prints per-scene and mean mIoU/mAcc.
-Voting is class-agnostic (it operates purely in feature space) and runs once;
-`--classes 15/10` re-evaluates the same voting products with a smaller label
-set, so those runs only need `--steps eval`.
+## Installation
 
-## Hyperparameters
+Tested on Linux with CUDA 12.x, PyTorch 2.x and a single NVIDIA GPU (RTX 4090 / A100 / V100 all work).
+
+NormLift calls two public code bases instead of copying them:
+
+| Dependency | Used for | Install |
+|---|---|---|
+| [splat-distiller](https://github.com/saliteta/splat-distiller) (Splat Feature Solver, v0.1.0) | `gsplat_ext` inverse rendering, COLMAP dataset loader | `git clone … && cd splat-distiller && pip install .`, then `export SPLAT_DISTILLER_DIR=$PWD` |
+| [OpenGaussian](https://github.com/yanmin-wu/OpenGaussian) (commit `1f99db1`) | 3DGS training with frozen initial points (ScanNet protocol) | `git clone … && git checkout 1f99db1`, follow its install, then `export OPENGAUSSIAN_DIR=$PWD` |
+
+Then, in the same environment:
+
+```sh
+conda install -c pytorch -c nvidia faiss-gpu -y
+pip install plyfile tqdm
+```
+
+> **Compiler note.** If the `gsplat_ext` CUDA extension fails to build, make sure `nvcc` matches your PyTorch CUDA version and that the CUDA headers are visible, e.g. `export CUDA_HOME=$CONDA_PREFIX CPATH=$CONDA_PREFIX/targets/x86_64-linux/include:$CPATH`. On Blackwell GPUs set `TORCH_CUDA_ARCH_LIST="8.6;12.0"`.
+
+## Data
+
+We use the 10 ScanNet v2 scenes of the OpenGaussian protocol: `scene0000_00, 0062_00, 0070_00, 0097_00, 0140_00, 0200_00, 0347_00, 0400_00, 0590_00, 0645_00`, in the OpenGaussian layout:
+
+```
+$NORMLIFT_DATA/<scene>/
+|---points3d.ply                       # scanned point cloud = Gaussian initialization
+|---transforms_train.json, transforms_test.json
+|---<scene>_vh_clean_2.labels.ply      # ground-truth NYU40 labels, one per point
+|---language_features/language_features/
+    |---<frame>_s.npy                  # SAM mask ids, 4 granularity levels [4, H, W]
+    |---<frame>_f.npy                  # one OpenCLIP ViT-B/16 feature per mask [M, 512]
+$NORMLIFT_DATA/<scene>_colmap/         # written by preprocess/convert_to_colmap.py
+```
+
+- **Scenes.** Follow the [OpenGaussian](https://github.com/yanmin-wu/OpenGaussian) instructions to obtain the ScanNet scenes with `points3d.ply`, `transforms_*.json` and the `*_vh_clean_2.labels.ply` ground truth.
+- **2D features.** Produced by the [LangSplat](https://github.com/minghanqin/LangSplat) preprocessing (`preprocess.py`: SAM ViT-H automatic masks at four granularities, one OpenCLIP ViT-B/16 feature per mask). NormLift uses the `l` level (index 3) and never trains an autoencoder, so the raw 512-d features are used as they are.
+- **Text features.** `assets/text_features.json` holds the OpenCLIP text embeddings of the class names and is taken unchanged from OpenGaussian's `assets/text_features.zip`, so that all methods are queried with identical text vectors. Note that this file spells one NYU40 class `showercurtain` while the ScanNet label is `shower curtain`; as in OpenGaussian's own evaluation script, that class therefore has no text vector and is never predicted (the evaluation prints a warning). We keep this behavior for comparability with the published baselines.
+
+## Pipeline
+
+| Step | Script | Output (under `$NORMLIFT_OUT/<scene>/`) |
+|---|---|---|
+| 0. COLMAP copy | `preprocess/convert_to_colmap.py` | `$NORMLIFT_DATA/<scene>_colmap/` |
+| 1. 3DGS with frozen points | `train/train_rgb.py` (OpenGaussian trainer, `--frozen_init_pts`, 30k iterations, `-r 2`) | `point_cloud/iteration_30000/point_cloud.ply` |
+| 2. Checkpoint conversion | `train/ply_to_pt.py` | `point_cloud/iteration_30000/point_cloud.pt` |
+| 3. Feature lifting | `lift/distill_features.py` — back-projection `f_j = Σ_i A_ij B_i / Σ_i A_ij` (Eq. 3) | `ckpts/point_cloud_features.pt` |
+| 4. Visibility & effective views | `pipeline/get_see_count.py`, `pipeline/get_eff_view.py` — `N_eff = (Σ_v W_v)² / Σ_v W_v²` (Eq. 6–7) | `see_count/`, `eff_view/eff_view.pt` |
+| 5. Reliability | `pipeline/get_confidence.py` — `R = ‖f‖ · N_eff / (N_eff + β)` (Eq. 8) | `confidence/confidence.pt` |
+| 6. Mode voting | `pipeline/knn_vote.py` — support score and conservative replacement (Eq. 9–10) | `knn_vote/voted_features.pt` |
+| 7. Evaluation | `pipeline/eval_scannet.py` — 1:1 Gaussian-to-point, 19 / 15 / 10 classes | printed mIoU / mAcc |
+
+`pipeline/run_pipeline.py` runs steps 4–7 for a list of scenes (`--scenes`, `--steps`). Voting is class-agnostic and runs once; `--classes 15/10` only re-evaluates the same voted features.
+
+### Hyperparameters
 
 | Stage | Parameter | Value |
 |---|---|---|
 | Training | iterations / resolution | 30 000 / `-r 2` |
-| Lifting | Tikhonov / SAM level | 1.0 / 3 |
-| Confidence | β (view gate) | 1.0 |
-| KNN vote | K / τ_r / σ_d / τ / γ / Δ | 36 / 0.75 / 0.3 m / 0.55 / 0.1 / 0.05 |
-| Eval | opacity threshold | 0.1 |
+| Lifting | SAM level / opacity sharpening | 3 (`l`) / none (`TIKHONOV = 1.0`) |
+| Reliability | β | 1.0 |
+| Mode voting | K / σ_d / τ / γ / Δ | 36 / 0.3 m / 0.55 / 0.1 / 0.05 |
+| Evaluation | opacity threshold | 0.1 (lower-opacity points are ignored, as in OpenGaussian) |
+
+All values are fixed across scenes and protocols; Appendix C of the paper reports the sensitivity analysis of all six (β, K, σ_d, τ, γ, Δ).
+
+## Repository structure
+
+```
+preprocess/convert_to_colmap.py   transforms_*.json -> COLMAP binary model
+train/train_rgb.py                frozen-point 3DGS via OpenGaussian (RGB stage only)
+train/ply_to_pt.py                INRIA ply -> gsplat checkpoint
+lift/distill_features.py          alpha-weighted back-projection of SAM+CLIP features
+pipeline/get_see_count.py         per-Gaussian visibility count
+pipeline/get_eff_view.py          effective number of views
+pipeline/get_confidence.py        reliability score R
+pipeline/knn_vote.py              reliability-guided KNN mode voting
+pipeline/eval_scannet.py          OpenGaussian-protocol evaluation
+pipeline/run_pipeline.py          driver for steps 4-7
+assets/text_features.json         OpenCLIP text embeddings of the class names (from OpenGaussian)
+```
+
+## Citation
+
+```bibtex
+@inproceedings{zang2026normlift,
+  title     = {NormLift: From Lifted Features To Semantic Reliability In 3D Gaussian Splatting},
+  author    = {Zang, Yihan and Li, Da and Engel, Dominik and Park, Shinkyu and Viola, Ivan},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2026}
+}
+```
+
+## Acknowledgements
+
+This repository builds on [Splat Feature Solver](https://github.com/saliteta/splat-distiller), [OpenGaussian](https://github.com/yanmin-wu/OpenGaussian), [gsplat](https://github.com/nerfstudio-project/gsplat), [LangSplat](https://github.com/minghanqin/LangSplat) and [gaussian-splatting](https://github.com/graphdeco-inria/gaussian-splatting). We thank the authors for releasing their code.

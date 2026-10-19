@@ -4,7 +4,6 @@
   <a href="https://arxiv.org/abs/2609.18898"><img alt="arXiv" src="https://img.shields.io/badge/arXiv-2609.18898-b31b1b"></a>
   <a href="https://neurips.cc/virtual/2026/poster/151918"><img alt="NeurIPS 2026" src="https://img.shields.io/badge/NeurIPS-2026-blue"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green"></a>
-  <a href="https://github.com/YihanZang/NormLift_release/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/YihanZang/NormLift_release?style=social"></a>
 </p>
 
 <p align="center">
@@ -116,34 +115,6 @@ $NORMLIFT_DATA/<scene>_colmap/         # written by preprocess/convert_to_colmap
 | 7. Evaluation | `pipeline/eval_scannet.py` — 1:1 Gaussian-to-point, 19 / 15 / 10 classes | printed mIoU / mAcc |
 
 `pipeline/run_pipeline.py` runs steps 4–7 for a list of scenes (`--scenes`, `--steps`). Voting is class-agnostic and runs once; `--classes 15/10` only re-evaluates the same voted features.
-
-### Hyperparameters
-
-| Stage | Parameter | Value |
-|---|---|---|
-| Training | iterations / resolution | 30 000 / `-r 2` |
-| Lifting | SAM level / opacity sharpening | 3 (`l`) / none (`TIKHONOV = 1.0`) |
-| Reliability | β | 1.0 |
-| Mode voting | K / σ_d / τ / γ / Δ | 36 / 0.3 m / 0.55 / 0.1 / 0.05 |
-| Evaluation | opacity threshold | 0.1 (lower-opacity points are ignored, as in OpenGaussian) |
-
-All values are fixed across scenes and protocols; Appendix C of the paper reports the sensitivity analysis of all six (β, K, σ_d, τ, γ, Δ).
-
-## Repository structure
-
-```
-preprocess/convert_to_colmap.py   transforms_*.json -> COLMAP binary model
-train/train_rgb.py                frozen-point 3DGS via OpenGaussian (RGB stage only)
-train/ply_to_pt.py                INRIA ply -> gsplat checkpoint
-lift/distill_features.py          alpha-weighted back-projection of SAM+CLIP features
-pipeline/get_see_count.py         per-Gaussian visibility count
-pipeline/get_eff_view.py          effective number of views
-pipeline/get_confidence.py        reliability score R
-pipeline/knn_vote.py              reliability-guided KNN mode voting
-pipeline/eval_scannet.py          OpenGaussian-protocol evaluation
-pipeline/run_pipeline.py          driver for steps 4-7
-assets/text_features.json         OpenCLIP text embeddings of the class names (from OpenGaussian)
-```
 
 ## Citation
 

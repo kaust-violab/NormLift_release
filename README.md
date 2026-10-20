@@ -119,11 +119,11 @@ $NORMLIFT_DATA/<scene>_colmap/         # written by preprocess/convert_to_colmap
 ## Citation
 
 ```bibtex
-@inproceedings{zang2026normlift,
-  title     = {NormLift: From Lifted Features To Semantic Reliability In 3D Gaussian Splatting},
-  author    = {Zang, Yihan and Li, Da and Engel, Dominik and Park, Shinkyu and Viola, Ivan},
-  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
-  year      = {2026}
+@article{zang2026normlift,
+  title={NormLift: From Lifted Features To Semantic Reliability In 3D Gaussian Splatting},
+  author={Zang, Yihan and Li, Da and Engel, Dominik and Park, Shinkyu and Viola, Ivan},
+  journal={arXiv preprint arXiv:2609.18898},
+  year={2026}
 }
 ```
 

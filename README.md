@@ -26,22 +26,6 @@ NormLift lifts 2D CLIP features onto 3D Gaussians **without training** and tells
 
 If you find this code useful, please consider citing our work (see [Citation](#citation)).
 
-## Results
-
-Open-vocabulary 3D semantic segmentation on ScanNet under the OpenGaussian protocol (10 scenes, every Gaussian classified independently against the class names). Numbers from Table 1 of the paper.
-
-| Method | Training-free | 19 cls. mIoU / mAcc | 15 cls. mIoU / mAcc | 10 cls. mIoU / mAcc |
-|---|:-:|:-:|:-:|:-:|
-| OpenGaussian | ✗ | 24.73 / 41.54 | 30.13 / 48.25 | 38.29 / 55.19 |
-| LAGA | ✗ | 32.50 / 49.10 | 35.50 / 53.50 | 42.60 / 63.20 |
-| SFS | ✓ | 33.33 / 51.35 | 36.43 / 55.38 | 44.74 / 63.53 |
-| LUDVIG | ✓ | 33.90 / 51.40 | 37.40 / 57.20 | 46.40 / 66.20 |
-| **NormLift** | ✓ | **35.77 / 54.02** | **39.62 / 59.26** | **48.93 / 68.83** |
-
-<p align="center">
-  <img src="assets/qualitative_scannet.png" width="100%">
-</p>
-
 ## Quickstart
 
 ```sh
